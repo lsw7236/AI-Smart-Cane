@@ -1,239 +1,342 @@
+#!/usr/bin/env python3
+
+import time
+import cv2
 from picamera2 import Picamera2
 from ultralytics import YOLO
-import cv2
-import time
 
 
-# =========================
-# Settings
-# =========================
+# =========================================================
+# Camera / YOLO settings
+# =========================================================
 
-WIDTH = 640
-HEIGHT = 640
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 
-CONF_THRESHOLD = 0.25
+MODEL_WIDTH = 640
+MODEL_HEIGHT = 640
 
-MODEL_PATH = "models/yolov8n_ncnn_model"
+YOLO_MODEL_PATH = "yolov8n.pt"
 
-
-# =========================
-# Grid position
-# =========================
-
-def get_grid_position(x_center, y_center, frame_width, frame_height):
-
-    cell_width = frame_width / 3
-    cell_height = frame_height / 3
-
-    # Column
-    if x_center < cell_width:
-        column = 0
-    elif x_center < cell_width * 2:
-        column = 1
-    else:
-        column = 2
-
-    # Row
-    if y_center < cell_height:
-        row = 0
-    elif y_center < cell_height * 2:
-        row = 1
-    else:
-        row = 2
-
-    positions = [
-        [
-            "TOP_LEFT",
-            "TOP_CENTER",
-            "TOP_RIGHT"
-        ],
-        [
-            "MIDDLE_LEFT",
-            "CENTER",
-            "MIDDLE_RIGHT"
-        ],
-        [
-            "BOTTOM_LEFT",
-            "BOTTOM_CENTER",
-            "BOTTOM_RIGHT"
-        ]
-    ]
-
-    return positions[row][column]
+CONFIDENCE_THRESHOLD = 0.35
 
 
-# =========================
+# =========================================================
+# Letterbox
+# =========================================================
+
+def letterbox(
+    image,
+    new_size=(640, 640),
+    color=(114, 114, 114)
+):
+    original_h, original_w = image.shape[:2]
+
+    target_w, target_h = new_size
+
+    scale = min(
+        target_w / original_w,
+        target_h / original_h
+    )
+
+    resized_w = int(
+        round(
+            original_w * scale
+        )
+    )
+
+    resized_h = int(
+        round(
+            original_h * scale
+        )
+    )
+
+    resized = cv2.resize(
+        image,
+        (
+            resized_w,
+            resized_h
+        ),
+        interpolation=cv2.INTER_LINEAR
+    )
+
+    pad_w = (
+        target_w
+        - resized_w
+    )
+
+    pad_h = (
+        target_h
+        - resized_h
+    )
+
+    pad_left = (
+        pad_w // 2
+    )
+
+    pad_right = (
+        pad_w
+        - pad_left
+    )
+
+    pad_top = (
+        pad_h // 2
+    )
+
+    pad_bottom = (
+        pad_h
+        - pad_top
+    )
+
+    return cv2.copyMakeBorder(
+        resized,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv2.BORDER_CONSTANT,
+        value=color
+    )
+
+
+# =========================================================
 # Draw 3x3 grid
-# =========================
+# =========================================================
 
-def draw_grid(frame):
+def draw_grid(image):
 
-    height, width = frame.shape[:2]
+    h, w = image.shape[:2]
 
-    x1 = width // 3
-    x2 = (width // 3) * 2
+    x1 = w // 3
+    x2 = (w * 2) // 3
 
-    y1 = height // 3
-    y2 = (height // 3) * 2
+    y1 = h // 3
+    y2 = (h * 2) // 3
 
     cv2.line(
-        frame,
+        image,
         (x1, 0),
-        (x1, height),
+        (x1, h),
         (255, 255, 255),
         2
     )
 
     cv2.line(
-        frame,
+        image,
         (x2, 0),
-        (x2, height),
+        (x2, h),
         (255, 255, 255),
         2
     )
 
     cv2.line(
-        frame,
+        image,
         (0, y1),
-        (width, y1),
+        (w, y1),
         (255, 255, 255),
         2
     )
 
     cv2.line(
-        frame,
+        image,
         (0, y2),
-        (width, y2),
+        (w, y2),
         (255, 255, 255),
         2
     )
 
 
-# =========================
-# Load YOLO NCNN model
-# =========================
+# =========================================================
+# Main
+# =========================================================
 
-print("Loading NCNN model...")
+def main():
 
-model = YOLO(
-    MODEL_PATH,
-    task="detect"
-)
+    print("Loading YOLO model...")
 
-print("YOLO model loaded.")
+    model = YOLO(
+        YOLO_MODEL_PATH
+    )
 
+    print("YOLO model loaded")
 
-# =========================
-# Camera setup
-# =========================
+    print("Starting camera...")
 
-print("Starting camera...")
+    picam2 = Picamera2()
 
-picam2 = Picamera2()
-
-camera_config = picam2.create_preview_configuration(
-    main={
-        "format": "RGB888",
-        "size": (WIDTH, HEIGHT),
-    }
-)
-
-picam2.configure(camera_config)
-
-picam2.start()
-
-time.sleep(2)
-
-print("Camera started.")
-print("Press Q to quit.")
-
-
-# =========================
-# Detection loop
-# =========================
-
-try:
-
-    while True:
-
-        frame = picam2.capture_array()
-
-        results = model.predict(
-            source=frame,
-            imgsz=640,
-            conf=CONF_THRESHOLD,
-            verbose=False
-        )
-
-        result = results[0]
-
-        # YOLO detection boxes
-        annotated_frame = result.plot()
-
-        # Draw 3x3 grid
-        draw_grid(annotated_frame)
-
-        # =========================
-        # Object position
-        # =========================
-
-        for box in result.boxes:
-
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-
-            x_center = (x1 + x2) / 2
-            y_center = (y1 + y2) / 2
-
-            class_id = int(box.cls[0])
-
-            class_name = model.names[class_id]
-
-            confidence = float(box.conf[0])
-
-            position = get_grid_position(
-                x_center,
-                y_center,
-                WIDTH,
-                HEIGHT
-            )
-
-            print(
-                f"Object: {class_name} | "
-                f"Position: {position} | "
-                f"Confidence: {confidence:.2f}"
-            )
-
-            # Show object center point
-            cv2.circle(
-                annotated_frame,
-                (
-                    int(x_center),
-                    int(y_center)
+    camera_config = (
+        picam2.create_preview_configuration(
+            main={
+                "size": (
+                    CAMERA_WIDTH,
+                    CAMERA_HEIGHT
                 ),
-                5,
-                (255, 255, 255),
-                -1
+                "format": "RGB888"
+            }
+        )
+    )
+
+    picam2.configure(
+        camera_config
+    )
+
+    picam2.start()
+
+    time.sleep(1)
+
+    print("Camera ready")
+    print("Press Q to quit.")
+
+    try:
+
+        while True:
+
+            frame = picam2.capture_array()
+
+            boxed = letterbox(
+                frame,
+                new_size=(
+                    MODEL_WIDTH,
+                    MODEL_HEIGHT
+                )
             )
 
-        cv2.imshow(
-            "YOLO NCNN 3x3 Grid",
-            annotated_frame
+            results = model(
+                boxed,
+                imgsz=640,
+                conf=CONFIDENCE_THRESHOLD,
+                verbose=False
+            )
+
+            draw_grid(
+                boxed
+            )
+
+            for result in results:
+
+                for box in result.boxes:
+
+                    cls_id = int(
+                        box.cls[0]
+                    )
+
+                    class_name = (
+                        model.names[
+                            cls_id
+                        ]
+                    )
+
+                    confidence = float(
+                        box.conf[0]
+                    )
+
+                    x1, y1, x2, y2 = (
+                        box.xyxy[
+                            0
+                        ].tolist()
+                    )
+
+                    x1 = int(x1)
+                    y1 = int(y1)
+                    x2 = int(x2)
+                    y2 = int(y2)
+
+                    # Detection box
+                    cv2.rectangle(
+                        boxed,
+                        (x1, y1),
+                        (x2, y2),
+                        (0, 0, 255),
+                        3
+                    )
+
+                    # Object center
+                    center_x = int(
+                        (x1 + x2) / 2
+                    )
+
+                    center_y = int(
+                        (y1 + y2) / 2
+                    )
+
+                    cv2.circle(
+                        boxed,
+                        (
+                            center_x,
+                            center_y
+                        ),
+                        7,
+                        (0, 255, 255),
+                        -1
+                    )
+
+                    label = (
+                        f"{class_name} "
+                        f"{confidence:.2f}"
+                    )
+
+                    cv2.putText(
+                        boxed,
+                        label,
+                        (
+                            x1,
+                            max(
+                                30,
+                                y1 - 10
+                            )
+                        ),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.75,
+                        (0, 0, 255),
+                        2
+                    )
+
+                    print(
+                        "Detected:",
+                        class_name,
+                        "| Confidence:",
+                        round(
+                            confidence,
+                            2
+                        ),
+                        "| Center:",
+                        (
+                            center_x,
+                            center_y
+                        )
+                    )
+
+            cv2.imshow(
+                "SmartCane YOLO Test",
+                boxed
+            )
+
+            key = (
+                cv2.waitKey(1)
+                & 0xFF
+            )
+
+            if key == ord("q"):
+                break
+
+    except KeyboardInterrupt:
+
+        print()
+        print("YOLO test stopped.")
+
+    finally:
+
+        try:
+            picam2.stop()
+        except Exception:
+            pass
+
+        cv2.destroyAllWindows()
+
+        print(
+            "Camera cleanup complete."
         )
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
 
-
-except KeyboardInterrupt:
-
-    print()
-    print("Detection interrupted.")
-
-
-finally:
-
-    picam2.stop()
-
-    cv2.destroyAllWindows()
-
-    print("Camera stopped.")
+if __name__ == "__main__":
+    main()
