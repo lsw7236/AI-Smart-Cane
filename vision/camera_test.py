@@ -73,6 +73,7 @@ def letterbox(
 # =========================================================
 
 def draw_grid(image):
+
     h, w = image.shape[:2]
 
     x1 = w // 3
@@ -119,6 +120,7 @@ def draw_grid(image):
 # =========================================================
 
 def main():
+
     print("Starting camera...")
 
     picam2 = Picamera2()
@@ -147,7 +149,9 @@ def main():
     print("Press Q to quit.")
 
     try:
+
         while True:
+
             frame = picam2.capture_array()
 
             boxed = letterbox(
@@ -176,18 +180,23 @@ def main():
                 break
 
     except KeyboardInterrupt:
+
         print()
         print("Camera test stopped.")
 
     finally:
+
         try:
             picam2.stop()
+
         except Exception:
             pass
 
         cv2.destroyAllWindows()
 
-        print("Camera cleanup complete.")
+        print(
+            "Camera cleanup complete."
+        )
 
 
 if __name__ == "__main__":
