@@ -4,186 +4,324 @@ import busio
 from adafruit_pca9685 import PCA9685
 
 
-# =========================
-# I2C / PCA9685 setup
-# =========================
+# =========================================================
+# PCA9685 settings
+# =========================================================
 
-i2c = busio.I2C(board.SCL, board.SDA)
+PCA9685_FREQUENCY = 1000
 
-pca = PCA9685(i2c)
-pca.frequency = 1000
+MOTOR_TOP = 0
+MOTOR_LEFT = 1
+MOTOR_BOTTOM = 2
+MOTOR_RIGHT = 3
 
-
-# =========================
-# Motor channel mapping
-# =========================
-#
-# Front direction motors used for YOLO object guidance.
-#
-# Final physical channel mapping can be changed later.
-#
-
-FRONT_LEFT = 0
-FRONT_CENTER = 1
-FRONT_RIGHT = 2
+MOTOR_STRENGTH_PERCENT = 30
+MOTOR_UPDATE_INTERVAL = 0.25
 
 
-# =========================
-# Motor settings
-# =========================
+# =========================================================
+# Direction mapping
+# =========================================================
 
-DEFAULT_POWER = 0.30
+DIRECTION_TO_CHANNELS = {
+    "TOP": [
+        MOTOR_TOP
+    ],
 
-MIN_POWER = 0.0
-MAX_POWER = 1.0
+    "LEFT": [
+        MOTOR_LEFT
+    ],
 
+    "BOTTOM": [
+        MOTOR_BOTTOM
+    ],
 
-# =========================
-# Basic motor control
-# =========================
+    "RIGHT": [
+        MOTOR_RIGHT
+    ],
 
-def power_to_duty(power):
-    power = max(MIN_POWER, min(power, MAX_POWER))
+    "TOP+LEFT": [
+        MOTOR_TOP,
+        MOTOR_LEFT
+    ],
 
-    return int(0xFFFF * power)
+    "TOP+RIGHT": [
+        MOTOR_TOP,
+        MOTOR_RIGHT
+    ],
 
+    "BOTTOM+LEFT": [
+        MOTOR_BOTTOM,
+        MOTOR_LEFT
+    ],
 
-def motor_on(channel, power=DEFAULT_POWER):
-    pca.channels[channel].duty_cycle = power_to_duty(power)
+    "BOTTOM+RIGHT": [
+        MOTOR_BOTTOM,
+        MOTOR_RIGHT
+    ],
 
-
-def motor_off(channel):
-    pca.channels[channel].duty_cycle = 0
-
-
-def all_front_motors_off():
-    motor_off(FRONT_LEFT)
-    motor_off(FRONT_CENTER)
-    motor_off(FRONT_RIGHT)
-
-
-# =========================
-# Direction control
-# =========================
-
-def vibrate_left(power=DEFAULT_POWER):
-    all_front_motors_off()
-
-    motor_on(FRONT_LEFT, power)
-
-    print("Direction: LEFT")
-
-
-def vibrate_center(power=DEFAULT_POWER):
-    all_front_motors_off()
-
-    motor_on(FRONT_CENTER, power)
-
-    print("Direction: CENTER")
+    # Target is aligned near the center.
+    # All four motors vibrate together.
+    "CENTER": [
+        MOTOR_TOP,
+        MOTOR_LEFT,
+        MOTOR_BOTTOM,
+        MOTOR_RIGHT
+    ],
+}
 
 
-def vibrate_right(power=DEFAULT_POWER):
-    all_front_motors_off()
+# =========================================================
+# Global objects
+# =========================================================
 
-    motor_on(FRONT_RIGHT, power)
+pca = None
+motor_i2c = None
 
-    print("Direction: RIGHT")
-
-
-def stop_direction():
-    all_front_motors_off()
-
-    print("Direction: STOP")
+last_motor_direction = None
+last_motor_update_time = 0.0
 
 
-# =========================
-# X-coordinate direction
-# =========================
+# =========================================================
+# Motor utility
+# =========================================================
 
-def get_direction(x_center, frame_width):
-    """
-    Convert an object's X center coordinate
-    into LEFT / CENTER / RIGHT.
-    """
+def motor_strength_to_duty(percent):
 
-    left_boundary = frame_width / 3
-    right_boundary = (frame_width / 3) * 2
-
-    if x_center < left_boundary:
-        return "LEFT"
-
-    elif x_center < right_boundary:
-        return "CENTER"
-
-    else:
-        return "RIGHT"
-
-
-def guide_object(x_center, frame_width, power=DEFAULT_POWER):
-    """
-    Vibrate the motor corresponding to
-    the detected object's position.
-    """
-
-    direction = get_direction(
-        x_center,
-        frame_width
+    percent = max(
+        0,
+        min(
+            100,
+            percent
+        )
     )
 
-    if direction == "LEFT":
-        vibrate_left(power)
-
-    elif direction == "CENTER":
-        vibrate_center(power)
-
-    elif direction == "RIGHT":
-        vibrate_right(power)
-
-    return direction
+    return int(
+        65535
+        * (
+            percent / 100.0
+        )
+    )
 
 
-# =========================
+# =========================================================
+# Initialization
+# =========================================================
+
+def initialize_motor():
+
+    global pca
+    global motor_i2c
+
+    print(
+        "[MOTOR] Initializing PCA9685..."
+    )
+
+    motor_i2c = busio.I2C(
+        board.SCL,
+        board.SDA
+    )
+
+    pca = PCA9685(
+        motor_i2c
+    )
+
+    pca.frequency = (
+        PCA9685_FREQUENCY
+    )
+
+    motor_stop_all()
+
+    print(
+        "[MOTOR] PCA9685 ready"
+    )
+
+    print(
+        "[MOTOR] Channels: "
+        "TOP=0 LEFT=1 BOTTOM=2 RIGHT=3"
+    )
+
+    print(
+        f"[MOTOR] Strength: "
+        f"{MOTOR_STRENGTH_PERCENT}%"
+    )
+
+
+# =========================================================
+# Stop motors
+# =========================================================
+
+def motor_stop_all():
+
+    global last_motor_direction
+
+    if pca is None:
+        return
+
+    for channel in [
+        MOTOR_TOP,
+        MOTOR_LEFT,
+        MOTOR_BOTTOM,
+        MOTOR_RIGHT
+    ]:
+
+        pca.channels[
+            channel
+        ].duty_cycle = 0
+
+    last_motor_direction = None
+
+
+# =========================================================
+# Direction control
+# =========================================================
+
+def motor_set_direction(
+    direction,
+    strength_percent=MOTOR_STRENGTH_PERCENT
+):
+
+    global last_motor_direction
+    global last_motor_update_time
+
+    if pca is None:
+        return
+
+    now = time.time()
+
+    if (
+        direction
+        == last_motor_direction
+        and now
+        - last_motor_update_time
+        < MOTOR_UPDATE_INTERVAL
+    ):
+
+        return
+
+    motor_stop_all()
+
+    channels = (
+        DIRECTION_TO_CHANNELS.get(
+            direction,
+            []
+        )
+    )
+
+    duty = motor_strength_to_duty(
+        strength_percent
+    )
+
+    for channel in channels:
+
+        pca.channels[
+            channel
+        ].duty_cycle = duty
+
+    last_motor_direction = (
+        direction
+    )
+
+    last_motor_update_time = (
+        now
+    )
+
+    print(
+        "[MOTOR]",
+        direction,
+        "->",
+        channels
+    )
+
+
+# =========================================================
+# Cleanup
+# =========================================================
+
+def cleanup_motor():
+
+    global pca
+    global motor_i2c
+
+    if pca is not None:
+
+        try:
+
+            motor_stop_all()
+
+            pca.deinit()
+
+        except Exception:
+            pass
+
+    pca = None
+    motor_i2c = None
+
+
+# =========================================================
 # Standalone test
-# =========================
+# =========================================================
 
-if __name__ == "__main__":
+def main():
 
-    print("Direction motor test started.")
+    initialize_motor()
+
+    test_directions = [
+        "TOP",
+        "TOP+RIGHT",
+        "RIGHT",
+        "BOTTOM+RIGHT",
+        "BOTTOM",
+        "BOTTOM+LEFT",
+        "LEFT",
+        "TOP+LEFT",
+        "CENTER"
+    ]
+
     print()
+    print(
+        "Direction motor test started."
+    )
 
     try:
 
-        print("LEFT")
-        vibrate_left()
-        time.sleep(1)
+        for direction in test_directions:
 
-        stop_direction()
-        time.sleep(0.5)
+            print()
+            print(
+                "Testing:",
+                direction
+            )
 
-        print("CENTER")
-        vibrate_center()
-        time.sleep(1)
+            motor_set_direction(
+                direction
+            )
 
-        stop_direction()
-        time.sleep(0.5)
+            time.sleep(
+                1.0
+            )
 
-        print("RIGHT")
-        vibrate_right()
-        time.sleep(1)
+            motor_stop_all()
 
-        stop_direction()
-
-        print()
-        print("Direction motor test complete.")
+            time.sleep(
+                0.5
+            )
 
     except KeyboardInterrupt:
 
         print()
-        print("Test interrupted.")
+        print(
+            "Motor test interrupted."
+        )
 
     finally:
 
-        all_front_motors_off()
-        pca.deinit()
+        cleanup_motor()
 
-        print("All motors OFF.")
+        print(
+            "Motor test complete."
+        )
+
+
+if __name__ == "__main__":
+    main()

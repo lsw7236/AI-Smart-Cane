@@ -4,114 +4,387 @@ import busio
 from adafruit_pca9685 import PCA9685
 
 
-# =========================
-# I2C / PCA9685 setup
-# =========================
+# =========================================================
+# PCA9685 settings
+# =========================================================
 
-i2c = busio.I2C(board.SCL, board.SDA)
+PCA9685_FREQUENCY = 1000
 
-pca = PCA9685(i2c)
-pca.frequency = 1000
+MOTOR_TOP = 0
+MOTOR_LEFT = 1
+MOTOR_BOTTOM = 2
+MOTOR_RIGHT = 3
+
+MOTOR_STRENGTH_PERCENT = 30
+
+TEST_DURATION_SEC = 1.0
+WAIT_DURATION_SEC = 0.5
 
 
-# =========================
-# 8-direction motor mapping
-# =========================
+# =========================================================
+# Direction mapping
+# =========================================================
 
-MOTOR_MAP = {
-    "FRONT": 0,
-    "FRONT_RIGHT": 1,
-    "RIGHT": 2,
-    "BACK_RIGHT": 3,
-    "BACK": 4,
-    "BACK_LEFT": 5,
-    "LEFT": 6,
-    "FRONT_LEFT": 7,
+DIRECTION_TO_CHANNELS = {
+    "TOP": [
+        MOTOR_TOP
+    ],
+
+    "LEFT": [
+        MOTOR_LEFT
+    ],
+
+    "BOTTOM": [
+        MOTOR_BOTTOM
+    ],
+
+    "RIGHT": [
+        MOTOR_RIGHT
+    ],
+
+    "TOP+LEFT": [
+        MOTOR_TOP,
+        MOTOR_LEFT
+    ],
+
+    "TOP+RIGHT": [
+        MOTOR_TOP,
+        MOTOR_RIGHT
+    ],
+
+    "BOTTOM+LEFT": [
+        MOTOR_BOTTOM,
+        MOTOR_LEFT
+    ],
+
+    "BOTTOM+RIGHT": [
+        MOTOR_BOTTOM,
+        MOTOR_RIGHT
+    ],
+
+    "CENTER": [
+        MOTOR_TOP,
+        MOTOR_LEFT,
+        MOTOR_BOTTOM,
+        MOTOR_RIGHT
+    ],
 }
 
 
-# =========================
-# Motor settings
-# =========================
+# =========================================================
+# Utility
+# =========================================================
 
-DEFAULT_POWER = 0.30
-TEST_DURATION = 1.0
-WAIT_DURATION = 0.5
+def motor_strength_to_duty(percent):
+
+    percent = max(
+        0,
+        min(
+            100,
+            percent
+        )
+    )
+
+    return int(
+        65535
+        * (
+            percent / 100.0
+        )
+    )
 
 
-# =========================
+# =========================================================
 # Motor control
-# =========================
+# =========================================================
 
-def power_to_duty(power):
-    power = max(0.0, min(power, 1.0))
-    return int(0xFFFF * power)
+def motor_on(
+    pca,
+    channel,
+    strength_percent=MOTOR_STRENGTH_PERCENT
+):
 
-
-def motor_on(channel, power=DEFAULT_POWER):
-    pca.channels[channel].duty_cycle = power_to_duty(power)
-
-
-def motor_off(channel):
-    pca.channels[channel].duty_cycle = 0
-
-
-def all_motors_off():
-    for channel in MOTOR_MAP.values():
-        motor_off(channel)
-
-
-# =========================
-# Direction test
-# =========================
-
-def test_direction(name, channel):
-    print(
-        f"{name} "
-        f"(CH{channel}) -> ON"
+    duty = motor_strength_to_duty(
+        strength_percent
     )
 
-    motor_on(channel)
-
-    time.sleep(TEST_DURATION)
-
-    motor_off(channel)
-
-    print(
-        f"{name} "
-        f"(CH{channel}) -> OFF"
-    )
-
-    time.sleep(WAIT_DURATION)
+    pca.channels[
+        channel
+    ].duty_cycle = duty
 
 
-# =========================
-# Main
-# =========================
+def motor_off(
+    pca,
+    channel
+):
 
-print("8-direction motor test started.")
-print()
+    pca.channels[
+        channel
+    ].duty_cycle = 0
 
-try:
 
-    for direction, channel in MOTOR_MAP.items():
-        test_direction(
-            direction,
+def motor_stop_all(
+    pca
+):
+
+    for channel in [
+        MOTOR_TOP,
+        MOTOR_LEFT,
+        MOTOR_BOTTOM,
+        MOTOR_RIGHT
+    ]:
+
+        motor_off(
+            pca,
             channel
         )
 
+
+def activate_direction(
+    pca,
+    direction
+):
+
+    motor_stop_all(
+        pca
+    )
+
+    channels = (
+        DIRECTION_TO_CHANNELS.get(
+            direction,
+            []
+        )
+    )
+
+    for channel in channels:
+
+        motor_on(
+            pca,
+            channel
+        )
+
+    print(
+        f"{direction} -> {channels}"
+    )
+
+
+# =========================================================
+# Individual channel test
+# =========================================================
+
+def test_individual_motors(
+    pca
+):
+
+    motors = [
+        (
+            "TOP",
+            MOTOR_TOP
+        ),
+        (
+            "LEFT",
+            MOTOR_LEFT
+        ),
+        (
+            "BOTTOM",
+            MOTOR_BOTTOM
+        ),
+        (
+            "RIGHT",
+            MOTOR_RIGHT
+        ),
+    ]
+
     print()
-    print("All direction tests complete.")
+    print(
+        "================================"
+    )
+    print(
+        " Individual motor test"
+    )
+    print(
+        "================================"
+    )
 
-except KeyboardInterrupt:
+    for name, channel in motors:
+
+        print(
+            f"{name} "
+            f"(CH{channel}) -> ON"
+        )
+
+        motor_on(
+            pca,
+            channel
+        )
+
+        time.sleep(
+            TEST_DURATION_SEC
+        )
+
+        motor_off(
+            pca,
+            channel
+        )
+
+        print(
+            f"{name} "
+            f"(CH{channel}) -> OFF"
+        )
+
+        time.sleep(
+            WAIT_DURATION_SEC
+        )
+
+
+# =========================================================
+# 3x3 direction test
+# =========================================================
+
+def test_direction_patterns(
+    pca
+):
+
+    test_directions = [
+        "TOP+LEFT",
+        "TOP",
+        "TOP+RIGHT",
+
+        "LEFT",
+        "CENTER",
+        "RIGHT",
+
+        "BOTTOM+LEFT",
+        "BOTTOM",
+        "BOTTOM+RIGHT",
+    ]
 
     print()
-    print("Test interrupted.")
+    print(
+        "================================"
+    )
+    print(
+        " 3x3 direction test"
+    )
+    print(
+        "================================"
+    )
 
-finally:
+    for direction in test_directions:
 
-    all_motors_off()
+        print()
+        print(
+            "Testing:",
+            direction
+        )
 
-    pca.deinit()
+        activate_direction(
+            pca,
+            direction
+        )
 
-    print("All motors OFF.")
+        time.sleep(
+            TEST_DURATION_SEC
+        )
+
+        motor_stop_all(
+            pca
+        )
+
+        time.sleep(
+            WAIT_DURATION_SEC
+        )
+
+
+# =========================================================
+# Main
+# =========================================================
+
+def main():
+
+    print(
+        "Initializing PCA9685..."
+    )
+
+    i2c = busio.I2C(
+        board.SCL,
+        board.SDA
+    )
+
+    pca = PCA9685(
+        i2c
+    )
+
+    pca.frequency = (
+        PCA9685_FREQUENCY
+    )
+
+    motor_stop_all(
+        pca
+    )
+
+    print(
+        "PCA9685 ready"
+    )
+
+    print(
+        "Channels:"
+    )
+
+    print(
+        "CH0 = TOP"
+    )
+
+    print(
+        "CH1 = LEFT"
+    )
+
+    print(
+        "CH2 = BOTTOM"
+    )
+
+    print(
+        "CH3 = RIGHT"
+    )
+
+    print(
+        f"Motor strength: "
+        f"{MOTOR_STRENGTH_PERCENT}%"
+    )
+
+    try:
+
+        test_individual_motors(
+            pca
+        )
+
+        test_direction_patterns(
+            pca
+        )
+
+        print()
+        print(
+            "All motor tests complete."
+        )
+
+    except KeyboardInterrupt:
+
+        print()
+        print(
+            "Motor test interrupted."
+        )
+
+    finally:
+
+        motor_stop_all(
+            pca
+        )
+
+        pca.deinit()
+
+        print(
+            "All motors OFF."
+        )
+
+
+if __name__ == "__main__":
+    main()
