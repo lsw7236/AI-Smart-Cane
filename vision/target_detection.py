@@ -1,289 +1,500 @@
+#!/usr/bin/env python3
+
+import time
+import cv2
 from picamera2 import Picamera2
 from ultralytics import YOLO
-import cv2
-import time
 
 
-# =========================
-# Settings
-# =========================
+# =========================================================
+# Camera / YOLO settings
+# =========================================================
 
-WIDTH = 640
-HEIGHT = 640
+CAMERA_WIDTH = 640
+CAMERA_HEIGHT = 480
 
-CONF_THRESHOLD = 0.25
+MODEL_WIDTH = 640
+MODEL_HEIGHT = 640
 
-MODEL_PATH = "models/yolov8n_ncnn_model"
+YOLO_MODEL_PATH = "yolov8n.pt"
+
+CONFIDENCE_THRESHOLD = 0.35
 
 # Test target
-# Later this value will be received from the mobile app.
+# Later this value will be received through BLE.
 TARGET_CLASS = "cell phone"
 
 
-# =========================
-# 3x3 position mapping
-# =========================
+# =========================================================
+# Letterbox
+# =========================================================
 
-POSITIONS = [
-    [
-        "TOP_LEFT",
-        "TOP_CENTER",
-        "TOP_RIGHT"
-    ],
-    [
-        "MIDDLE_LEFT",
-        "CENTER",
-        "MIDDLE_RIGHT"
-    ],
-    [
-        "BOTTOM_LEFT",
-        "BOTTOM_CENTER",
-        "BOTTOM_RIGHT"
-    ]
-]
-
-
-def get_grid_position(
-    x_center,
-    y_center,
-    frame_width,
-    frame_height
+def letterbox(
+    image,
+    new_size=(640, 640),
+    color=(114, 114, 114)
 ):
+    original_h, original_w = image.shape[:2]
 
-    cell_width = frame_width / 3
-    cell_height = frame_height / 3
+    target_w, target_h = new_size
 
-    # Column
-    if x_center < cell_width:
-        column = 0
-    elif x_center < cell_width * 2:
-        column = 1
+    scale = min(
+        target_w / original_w,
+        target_h / original_h
+    )
+
+    resized_w = int(
+        round(original_w * scale)
+    )
+
+    resized_h = int(
+        round(original_h * scale)
+    )
+
+    resized = cv2.resize(
+        image,
+        (
+            resized_w,
+            resized_h
+        ),
+        interpolation=cv2.INTER_LINEAR
+    )
+
+    pad_w = target_w - resized_w
+    pad_h = target_h - resized_h
+
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+
+    return cv2.copyMakeBorder(
+        resized,
+        pad_top,
+        pad_bottom,
+        pad_left,
+        pad_right,
+        cv2.BORDER_CONSTANT,
+        value=color
+    )
+
+
+# =========================================================
+# 3x3 direction calculation
+# =========================================================
+
+def bbox_to_direction(
+    bbox,
+    width=640,
+    height=640
+):
+    x1, y1, x2, y2 = bbox
+
+    center_x = (
+        x1 + x2
+    ) / 2
+
+    center_y = (
+        y1 + y2
+    ) / 2
+
+    cell_w = width / 3
+    cell_h = height / 3
+
+    # Horizontal position
+    if center_x < cell_w:
+        horizontal = "LEFT"
+
+    elif center_x < cell_w * 2:
+        horizontal = "CENTER"
+
     else:
-        column = 2
+        horizontal = "RIGHT"
 
-    # Row
-    if y_center < cell_height:
-        row = 0
-    elif y_center < cell_height * 2:
-        row = 1
+    # Vertical position
+    if center_y < cell_h:
+        vertical = "TOP"
+
+    elif center_y < cell_h * 2:
+        vertical = "CENTER"
+
     else:
-        row = 2
+        vertical = "BOTTOM"
 
-    return POSITIONS[row][column]
+    # Center
+    if (
+        vertical == "CENTER"
+        and horizontal == "CENTER"
+    ):
+        return "CENTER"
+
+    # Middle-left / middle-right
+    if vertical == "CENTER":
+        return horizontal
+
+    # Top-center / bottom-center
+    if horizontal == "CENTER":
+        return vertical
+
+    # Corner positions
+    return (
+        vertical
+        + "+"
+        + horizontal
+    )
 
 
-# =========================
+# =========================================================
 # Draw 3x3 grid
-# =========================
+# =========================================================
 
-def draw_grid(frame):
+def draw_grid(image):
+    h, w = image.shape[:2]
 
-    height, width = frame.shape[:2]
+    x1 = w // 3
+    x2 = (w * 2) // 3
 
-    x1 = width // 3
-    x2 = (width // 3) * 2
-
-    y1 = height // 3
-    y2 = (height // 3) * 2
+    y1 = h // 3
+    y2 = (h * 2) // 3
 
     cv2.line(
-        frame,
+        image,
         (x1, 0),
-        (x1, height),
+        (x1, h),
         (255, 255, 255),
         2
     )
 
     cv2.line(
-        frame,
+        image,
         (x2, 0),
-        (x2, height),
+        (x2, h),
         (255, 255, 255),
         2
     )
 
     cv2.line(
-        frame,
+        image,
         (0, y1),
-        (width, y1),
+        (w, y1),
         (255, 255, 255),
         2
     )
 
     cv2.line(
-        frame,
+        image,
         (0, y2),
-        (width, y2),
+        (w, y2),
         (255, 255, 255),
         2
     )
 
 
-# =========================
-# Load model
-# =========================
+# =========================================================
+# Draw target detection
+# =========================================================
 
-print("Loading NCNN model...")
+def draw_detection(
+    image,
+    bbox,
+    class_name,
+    confidence,
+    direction
+):
+    x1, y1, x2, y2 = [
+        int(value)
+        for value in bbox
+    ]
 
-model = YOLO(
-    MODEL_PATH,
-    task="detect"
-)
+    cv2.rectangle(
+        image,
+        (x1, y1),
+        (x2, y2),
+        (0, 0, 255),
+        3
+    )
 
-print("YOLO model loaded.")
+    center_x = int(
+        (x1 + x2) / 2
+    )
 
+    center_y = int(
+        (y1 + y2) / 2
+    )
 
-# =========================
-# Camera setup
-# =========================
+    cv2.circle(
+        image,
+        (
+            center_x,
+            center_y
+        ),
+        7,
+        (0, 255, 255),
+        -1
+    )
 
-print("Starting camera...")
+    label = (
+        f"{class_name} "
+        f"{confidence:.2f} "
+        f"{direction}"
+    )
 
-picam2 = Picamera2()
-
-camera_config = picam2.create_preview_configuration(
-    main={
-        "format": "RGB888",
-        "size": (WIDTH, HEIGHT),
-    }
-)
-
-picam2.configure(camera_config)
-
-picam2.start()
-
-time.sleep(2)
-
-print("Camera started.")
-print(f"Target: {TARGET_CLASS}")
-print("Press Q to quit.")
-print()
-
-
-# =========================
-# Target detection loop
-# =========================
-
-try:
-
-    while True:
-
-        frame = picam2.capture_array()
-
-        results = model.predict(
-            source=frame,
-            imgsz=640,
-            conf=CONF_THRESHOLD,
-            verbose=False
-        )
-
-        result = results[0]
-
-        display_frame = frame.copy()
-
-        draw_grid(display_frame)
-
-        target_found = False
-
-        for box in result.boxes:
-
-            class_id = int(box.cls[0])
-            class_name = model.names[class_id]
-
-            # Ignore objects other than the target
-            if class_name != TARGET_CLASS:
-                continue
-
-            target_found = True
-
-            confidence = float(box.conf[0])
-
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-
-            x_center = (x1 + x2) / 2
-            y_center = (y1 + y2) / 2
-
-            position = get_grid_position(
-                x_center,
-                y_center,
-                WIDTH,
-                HEIGHT
+    cv2.putText(
+        image,
+        label,
+        (
+            x1,
+            max(
+                30,
+                y1 - 10
             )
+        ),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.75,
+        (0, 0, 255),
+        2
+    )
 
-            # Draw target bounding box
-            cv2.rectangle(
-                display_frame,
-                (int(x1), int(y1)),
-                (int(x2), int(y2)),
-                (255, 255, 255),
-                2
-            )
 
-            # Draw target center
-            cv2.circle(
-                display_frame,
-                (
-                    int(x_center),
-                    int(y_center)
+# =========================================================
+# Main
+# =========================================================
+
+def main():
+
+    print("Loading YOLO model...")
+
+    model = YOLO(
+        YOLO_MODEL_PATH
+    )
+
+    print("YOLO model loaded")
+
+    print("Starting camera...")
+
+    picam2 = Picamera2()
+
+    camera_config = (
+        picam2.create_preview_configuration(
+            main={
+                "size": (
+                    CAMERA_WIDTH,
+                    CAMERA_HEIGHT
                 ),
-                5,
-                (255, 255, 255),
-                -1
-            )
-
-            # Only class name + confidence on screen
-            label = (
-                f"{class_name} "
-                f"{confidence:.2f}"
-            )
-
-            cv2.putText(
-                display_frame,
-                label,
-                (
-                    int(x1),
-                    max(int(y1) - 10, 20)
-                ),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (255, 255, 255),
-                2
-            )
-
-            # Position is printed only in console
-            print(
-                f"TARGET FOUND | "
-                f"Object: {class_name} | "
-                f"Position: {position} | "
-                f"Center: "
-                f"({x_center:.1f}, {y_center:.1f}) | "
-                f"Confidence: {confidence:.2f}"
-            )
-
-        if not target_found:
-            print(
-                f"Searching for: {TARGET_CLASS}"
-            )
-
-        cv2.imshow(
-            "Target Detection",
-            display_frame
+                "format": "RGB888"
+            }
         )
+    )
 
-        if cv2.waitKey(1) & 0xFF == ord("q"):
-            break
+    picam2.configure(
+        camera_config
+    )
 
+    picam2.start()
 
-except KeyboardInterrupt:
+    time.sleep(1)
 
+    print("Camera ready")
+    print("Target:", TARGET_CLASS)
+    print("Press Q to quit.")
     print()
-    print("Target detection interrupted.")
+
+    last_print_time = 0.0
+
+    try:
+
+        while True:
+
+            frame = picam2.capture_array()
+
+            boxed = letterbox(
+                frame,
+                new_size=(
+                    MODEL_WIDTH,
+                    MODEL_HEIGHT
+                )
+            )
+
+            draw_grid(
+                boxed
+            )
+
+            results = model(
+                boxed,
+                imgsz=640,
+                conf=CONFIDENCE_THRESHOLD,
+                verbose=False
+            )
+
+            best_detection = None
+
+            # =================================================
+            # Find best detection of the target class
+            # =================================================
+
+            for result in results:
+
+                for box in result.boxes:
+
+                    cls_id = int(
+                        box.cls[0]
+                    )
+
+                    class_name = (
+                        model.names[
+                            cls_id
+                        ]
+                    )
+
+                    # Ignore non-target objects
+                    if class_name != TARGET_CLASS:
+                        continue
+
+                    confidence = float(
+                        box.conf[0]
+                    )
+
+                    x1, y1, x2, y2 = (
+                        box.xyxy[
+                            0
+                        ].tolist()
+                    )
+
+                    bbox = (
+                        x1,
+                        y1,
+                        x2,
+                        y2
+                    )
+
+                    # Keep only the highest-confidence target
+                    if (
+                        best_detection is None
+                        or confidence
+                        > best_detection[
+                            "confidence"
+                        ]
+                    ):
+
+                        best_detection = {
+                            "bbox": bbox,
+                            "class_name": class_name,
+                            "confidence": confidence
+                        }
+
+            # =================================================
+            # Target found
+            # =================================================
+
+            if best_detection is not None:
+
+                bbox = (
+                    best_detection[
+                        "bbox"
+                    ]
+                )
+
+                class_name = (
+                    best_detection[
+                        "class_name"
+                    ]
+                )
+
+                confidence = (
+                    best_detection[
+                        "confidence"
+                    ]
+                )
+
+                direction = (
+                    bbox_to_direction(
+                        bbox,
+                        MODEL_WIDTH,
+                        MODEL_HEIGHT
+                    )
+                )
+
+                draw_detection(
+                    boxed,
+                    bbox,
+                    class_name,
+                    confidence,
+                    direction
+                )
+
+                now = time.time()
+
+                if (
+                    now
+                    - last_print_time
+                    >= 0.5
+                ):
+
+                    print(
+                        "FOUND:",
+                        class_name,
+                        "| Confidence:",
+                        round(
+                            confidence,
+                            2
+                        ),
+                        "| Direction:",
+                        direction
+                    )
+
+                    last_print_time = now
+
+            # =================================================
+            # Target not found
+            # =================================================
+
+            else:
+
+                cv2.putText(
+                    boxed,
+                    "Searching: "
+                    + TARGET_CLASS,
+                    (20, 40),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.9,
+                    (0, 0, 255),
+                    2
+                )
+
+            cv2.imshow(
+                "SmartCane Target Detection",
+                boxed
+            )
+
+            key = (
+                cv2.waitKey(1)
+                & 0xFF
+            )
+
+            if key == ord("q"):
+                break
+
+    except KeyboardInterrupt:
+
+        print()
+        print(
+            "Target detection stopped."
+        )
+
+    finally:
+
+        try:
+            picam2.stop()
+        except Exception:
+            pass
+
+        cv2.destroyAllWindows()
+
+        print(
+            "Camera cleanup complete."
+        )
 
 
-finally:
-
-    picam2.stop()
-
-    cv2.destroyAllWindows()
-
-    print("Camera stopped.")
+if __name__ == "__main__":
+    main()
