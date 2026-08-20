@@ -2,23 +2,28 @@
 
 import time
 import cv2
+
 from picamera2 import Picamera2
 from ultralytics import YOLO
 
+from models.model_config import (
+    YOLO_MODEL_PATH,
+    CONFIDENCE_THRESHOLD,
+    INPUT_WIDTH,
+    INPUT_HEIGHT,
+    MODEL_TASK,
+)
+
 
 # =========================================================
-# Camera / YOLO settings
+# Camera settings
 # =========================================================
 
 CAMERA_WIDTH = 640
 CAMERA_HEIGHT = 480
 
-MODEL_WIDTH = 640
-MODEL_HEIGHT = 640
-
-YOLO_MODEL_PATH = "yolov8n.pt"
-
-CONFIDENCE_THRESHOLD = 0.35
+MODEL_WIDTH = INPUT_WIDTH
+MODEL_HEIGHT = INPUT_HEIGHT
 
 # Test target
 # Later this value will be received through BLE.
@@ -150,6 +155,7 @@ def bbox_to_direction(
 # =========================================================
 
 def draw_grid(image):
+
     h, w = image.shape[:2]
 
     x1 = w // 3
@@ -266,10 +272,14 @@ def main():
     print("Loading YOLO model...")
 
     model = YOLO(
-        YOLO_MODEL_PATH
+        YOLO_MODEL_PATH,
+        task=MODEL_TASK
     )
 
-    print("YOLO model loaded")
+    print(
+        "YOLO model loaded:",
+        YOLO_MODEL_PATH
+    )
 
     print("Starting camera...")
 
@@ -297,6 +307,10 @@ def main():
 
     print("Camera ready")
     print("Target:", TARGET_CLASS)
+    print(
+        "Confidence threshold:",
+        CONFIDENCE_THRESHOLD
+    )
     print("Press Q to quit.")
     print()
 
@@ -322,7 +336,7 @@ def main():
 
             results = model(
                 boxed,
-                imgsz=640,
+                imgsz=MODEL_WIDTH,
                 conf=CONFIDENCE_THRESHOLD,
                 verbose=False
             )
@@ -347,7 +361,6 @@ def main():
                         ]
                     )
 
-                    # Ignore non-target objects
                     if class_name != TARGET_CLASS:
                         continue
 
@@ -368,7 +381,6 @@ def main():
                         y2
                     )
 
-                    # Keep only the highest-confidence target
                     if (
                         best_detection is None
                         or confidence
@@ -486,6 +498,7 @@ def main():
 
         try:
             picam2.stop()
+
         except Exception:
             pass
 
