@@ -3,93 +3,197 @@ import board
 import busio
 from adafruit_pca9685 import PCA9685
 
-# =========================
-# I2C setup
-# =========================
 
-i2c = busio.I2C(board.SCL, board.SDA)
+# =========================================================
+# PCA9685 settings
+# =========================================================
 
-pca = PCA9685(i2c)
-
-# PCA9685 PWM frequency
-pca.frequency = 1000
-
-
-# =========================
-# Motor settings
-# =========================
+PCA9685_FREQUENCY = 1000
 
 MOTOR_CHANNELS = [
-    0,
-    1,
-    2,
-    3,
-    4,
-    5,
-    6,
-    7,
+    0,  # TOP
+    1,  # LEFT
+    2,  # BOTTOM
+    3,  # RIGHT
 ]
 
-# 30% vibration strength
-MOTOR_POWER = int(0xFFFF * 0.30)
+MOTOR_STRENGTH_PERCENT = 30
 
-TEST_DURATION = 1.0
-WAIT_DURATION = 0.5
+TEST_DURATION_SEC = 1.0
+WAIT_DURATION_SEC = 0.5
 
 
-# =========================
+# =========================================================
+# Utility
+# =========================================================
+
+def motor_strength_to_duty(percent):
+
+    percent = max(
+        0,
+        min(
+            100,
+            percent
+        )
+    )
+
+    return int(
+        65535
+        * (
+            percent / 100.0
+        )
+    )
+
+
+# =========================================================
 # Motor control
-# =========================
+# =========================================================
 
-def motor_on(channel, power=MOTOR_POWER):
-    pca.channels[channel].duty_cycle = power
+def motor_on(
+    pca,
+    channel,
+    strength_percent=MOTOR_STRENGTH_PERCENT
+):
+
+    duty = motor_strength_to_duty(
+        strength_percent
+    )
+
+    pca.channels[
+        channel
+    ].duty_cycle = duty
 
 
-def motor_off(channel):
-    pca.channels[channel].duty_cycle = 0
+def motor_off(
+    pca,
+    channel
+):
+
+    pca.channels[
+        channel
+    ].duty_cycle = 0
 
 
-def all_motors_off():
+def all_motors_off(
+    pca
+):
+
     for channel in MOTOR_CHANNELS:
-        motor_off(channel)
+
+        motor_off(
+            pca,
+            channel
+        )
 
 
-# =========================
-# Test
-# =========================
+# =========================================================
+# Main
+# =========================================================
 
-print("PCA9685 motor test started.")
-print("Testing channels 0 to 7.")
-print()
+def main():
 
-try:
+    print(
+        "Initializing PCA9685..."
+    )
 
-    for channel in MOTOR_CHANNELS:
+    i2c = busio.I2C(
+        board.SCL,
+        board.SDA
+    )
 
-        print(f"Motor channel {channel}: ON")
+    pca = PCA9685(
+        i2c
+    )
 
-        motor_on(channel)
+    pca.frequency = (
+        PCA9685_FREQUENCY
+    )
 
-        time.sleep(TEST_DURATION)
+    all_motors_off(
+        pca
+    )
 
-        motor_off(channel)
+    print(
+        "PCA9685 ready"
+    )
 
-        print(f"Motor channel {channel}: OFF")
+    print(
+        "CH0 = TOP"
+    )
 
-        time.sleep(WAIT_DURATION)
+    print(
+        "CH1 = LEFT"
+    )
+
+    print(
+        "CH2 = BOTTOM"
+    )
+
+    print(
+        "CH3 = RIGHT"
+    )
+
+    print(
+        f"Strength: "
+        f"{MOTOR_STRENGTH_PERCENT}%"
+    )
 
     print()
-    print("Motor test complete.")
 
-except KeyboardInterrupt:
+    try:
 
-    print()
-    print("Test interrupted.")
+        for channel in MOTOR_CHANNELS:
 
-finally:
+            print(
+                f"CH{channel} -> ON"
+            )
 
-    all_motors_off()
+            motor_on(
+                pca,
+                channel
+            )
 
-    pca.deinit()
+            time.sleep(
+                TEST_DURATION_SEC
+            )
 
-    print("All motors OFF.")
+            motor_off(
+                pca,
+                channel
+            )
+
+            print(
+                f"CH{channel} -> OFF"
+            )
+
+            time.sleep(
+                WAIT_DURATION_SEC
+            )
+
+        print()
+        print(
+            "PCA9685 test complete."
+        )
+
+    except KeyboardInterrupt:
+
+        print()
+        print(
+            "Test interrupted."
+        )
+
+    finally:
+
+        all_motors_off(
+            pca
+        )
+
+        pca.deinit()
+
+        print(
+            "All motors OFF."
+        )
+
+
+if __name__ == "__main__":
+    main()
